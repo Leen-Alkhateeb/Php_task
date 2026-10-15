@@ -1,234 +1,255 @@
 <?php
-session_start(); // لازم أول سطر عشان نستخدم الـ Session
+// لازم نحمّل الكلاس قبل session_start() عشان PHP يقدر يرجّع الكائن من الـ Session
+require_once 'Registration.php';
+session_start();
 
-// ---------- الكلاس (الـ Object) ----------
-// كلاس بسيط بيمثل المستخدم، كل خاصية (property) بتخزن قيمة من النموذج
-class User {
-    public $name;
-    public $email;
-    public $mobile;
-    public $governorate;
-    public $track;
-    public $skills;
-    public $message;
+// دالة لتنظيف أي نص قبل ما نطبعه بالصفحة (حماية من XSS)
+function e($value): string
+{
+    return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
 }
 
-// ---------- متغيرات البداية ----------
-$errors = [];      // هون منخزن رسائل الأخطاء (المفتاح = اسم الحقل، القيمة = نص الخطأ)
-$success = false;  // بصير true لما كل شي يكون صح
+// ---------- القوائم الثابتة (منستخدمها بالفورم وبالتحقق كمان) ----------
+$governorates = ['Amman', 'Irbid', 'Zarqa', 'Balqa', 'Mafraq', 'Jerash', 'Ajloun', 'Karak', 'Tafilah', 'Maan', 'Aqaba', 'Madaba'];
+$tracks       = ['Web Development', 'Data Science', 'Mobile Apps', 'Cyber Security'];
+$skillsList   = ['HTML', 'CSS', 'JavaScript', 'PHP', 'SQL', 'Python'];
 
-// القيم القديمة (فاضية بالبداية)
-// بنحتاجها عشان نعيد عرض اللي كتبه المستخدم إذا صار خطأ بدل ما تنمسح الحقول
-$name = "";
-$email = "";
-$mobile = "";
-$governorate = "";
-$track = "";
-$skills = [];
-$message = "";
-$agree = "";
+$errors  = [];    // هون منخزن رسائل الأخطاء، المفتاح هو اسم الحقل
+$success = null;  // بيصير فيه كائن Registration إذا التسجيل نجح
 
-// ---------- الكوكي: لو المستخدم زارنا قبل، نعبي الاسم والتراك ----------
-// الكوكي بتنحفظ بمتصفح المستخدم، فبنقدر نعبي الحقول تلقائياً بالزيارة الجاية
-if (isset($_COOKIE["saved_name"])) {
-    $name = $_COOKIE["saved_name"];
+// القيم الافتراضية للفورم
+$old = [
+    'name' => '', 'email' => '', 'mobile' => '',
+    'governorate' => '', 'track' => '', 'skills' => [],
+    'message' => '', 'terms' => '',
+];
+
+// ---------- الكوكيز: نعبّي الاسم والإيميل والـ Track من الكوكي لما يزور الصفحة عادي (مش POST) ----------
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    foreach (['name', 'email', 'track'] as $key) {
+        if (isset($_COOKIE['reg_' . $key])) {
+            $old[$key] = $_COOKIE['reg_' . $key];
+        }
+    }
 }
-if (isset($_COOKIE["saved_track"])) {
-    $track = $_COOKIE["saved_track"];
-}
 
-// ---------- لما المستخدم يضغط Register ----------
-// الصفحة بتنفتح أول مرة بطريقة GET (نعرض النموذج بس)، وبعد الضغط على الزر بتصير POST
-if ($_SERVER["REQUEST_METHOD"] == "POST") {
+// ---------- معالجة الفورم لما المستخدم يضغط Register ----------
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
-    // 1) نجمع البيانات من $_POST وننظفها بـ trim()
-    // trim بتشيل المسافات من أول وآخر النص، و ?? "" بتعطي قيمة فاضية إذا الحقل مش موجود
-    $name = trim($_POST["name"] ?? "");
-    $email = trim($_POST["email"] ?? "");
-    $mobile = trim($_POST["mobile"] ?? "");
-    $governorate = trim($_POST["governorate"] ?? "");
-    $track = trim($_POST["track"] ?? "");
-    $message = trim($_POST["message"] ?? "");
-    $skills = $_POST["skills"] ?? [];      // مصفوفة (من checkboxes اسمها skills[])
-    $agree = $_POST["agree"] ?? "";
+    // 1) نجمع البيانات من $_POST وننظفها بـ trim() (بتشيل المسافات الزايدة)
+    //    و ?? '' بتعطي قيمة فاضية إذا الحقل مش موجود
+    $old['name']        = trim($_POST['name'] ?? '');
+    $old['email']       = trim($_POST['email'] ?? '');
+    $old['mobile']      = trim($_POST['mobile'] ?? '');
+    $old['governorate'] = trim($_POST['governorate'] ?? '');
+    $old['track']       = trim($_POST['track'] ?? '');
+    $old['message']     = trim($_POST['message'] ?? '');
+    // الـ checkbox إذا انضغط بينبعث، وإذا لا ما بينبعث أصلاً
+    $old['terms']       = isset($_POST['terms']) ? '1' : '';
 
-    // 2) التحقق (Validation)
-    // أي حقل فيه مشكلة بنضيف له رسالة خطأ بمصفوفة $errors
-    if ($name == "") {
-        $errors["name"] = "الاسم مطلوب";
+    // المهارات لازم تكون مصفوفة، ونشيل أي شي مش نص، وننظف كل عنصر
+    $postedSkills = (isset($_POST['skills']) && is_array($_POST['skills'])) ? $_POST['skills'] : [];
+    $old['skills'] = array_map('trim', array_filter($postedSkills, 'is_string'));
+
+    // 2) التحقق (التحقق الحقيقي بيصير هون بالـ PHP مش بالـ HTML)
+
+    // الاسم: مطلوب، وما يقل عن 3 أحرف
+    if ($old['name'] === '') {
+        $errors['name'] = 'Full name is required.';
+    } elseif (mb_strlen($old['name']) < 3) {
+        $errors['name'] = 'Name must be at least 3 characters.';
     }
 
-    if ($email == "") {
-        $errors["email"] = "الايميل مطلوب";
-    } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        // filter_var بتتأكد إنه شكل الايميل صحيح
-        $errors["email"] = "صيغة الايميل غلط";
+    // الإيميل: مطلوب وبصيغة صحيحة (filter_var بتتأكد من الصيغة)
+    if ($old['email'] === '') {
+        $errors['email'] = 'Email is required.';
+    } elseif (!filter_var($old['email'], FILTER_VALIDATE_EMAIL)) {
+        $errors['email'] = 'Enter a valid email address.';
     }
 
-    if ($mobile == "") {
-        $errors["mobile"] = "رقم الموبايل مطلوب";
-    } elseif (!preg_match("/^07[789][0-9]{7}$/", $mobile)) {
-        // Regex: لازم يبدأ بـ 07 بعدها 7 أو 8 أو 9، وبعدين 7 أرقام (المجموع 10 أرقام)
-        $errors["mobile"] = "الرقم لازم يكون مثل 0791234567";
+    // الموبايل: بنشيل المسافات والشرطات أول، بعدين نتأكد من الصيغة الأردنية 07X XXXXXXX
+    // (X بتكون 7 أو 8 أو 9)
+    $mobileClean = preg_replace('/[\s\-]/', '', $old['mobile']);
+    if ($old['mobile'] === '') {
+        $errors['mobile'] = 'Mobile number is required.';
+    } elseif (!preg_match('/^07[789][0-9]{7}$/', $mobileClean)) {
+        $errors['mobile'] = 'Enter a valid mobile number, e.g. 0791234567.';
     }
 
-    if ($governorate == "") {
-        $errors["governorate"] = "اختار المحافظة";
+    // المحافظة: لازم تكون مختارة ومن ضمن القائمة (عشان حدا ما يبعث قيمة مزيفة)
+    if ($old['governorate'] === '') {
+        $errors['governorate'] = 'Please select a governorate.';
+    } elseif (!in_array($old['governorate'], $governorates, true)) {
+        $errors['governorate'] = 'Invalid governorate.';
     }
 
-    if ($track == "") {
-        $errors["track"] = "اختار تراك";
+    // الـ Track: لازم خيار واحد ومن ضمن القائمة
+    if ($old['track'] === '') {
+        $errors['track'] = 'Please choose a track.';
+    } elseif (!in_array($old['track'], $tracks, true)) {
+        $errors['track'] = 'Invalid track.';
     }
 
-    // لو ما اختار ولا مهارة، المصفوفة بتكون فاضية
-    if (count($skills) == 0) {
-        $errors["skills"] = "اختار مهارة وحدة على الأقل";
+    // المهارات: وحدة على الأقل، وكلها لازم تكون من القائمة
+    // array_diff بترجع أي قيمة مش موجودة بالقائمة الأصلية
+    if (count($old['skills']) === 0) {
+        $errors['skills'] = 'Select at least one skill.';
+    } elseif (array_diff($old['skills'], $skillsList)) {
+        $errors['skills'] = 'Invalid skill selected.';
     }
 
-    if ($agree == "") {
-        $errors["agree"] = "لازم توافق على الشروط";
+    // الشروط والأحكام: لازم توافق عليها
+    if ($old['terms'] !== '1') {
+        $errors['terms'] = 'You must accept the terms and conditions.';
     }
 
-    // 3) لو ما في أخطاء → نكمل التسجيل
-    if (count($errors) == 0) {
+    // 3) إذا ما في ولا خطأ: نعمل الكائن ونحفظه بالـ Session والكوكيز
+    if (empty($errors)) {
+        $success = new Registration(
+            $old['name'],
+            $old['email'],
+            $mobileClean,
+            $old['governorate'],
+            $old['track'],
+            $old['skills'],
+            $old['message']
+        );
 
-        // نعمل Object ونعبيه
-        $user = new User();
-        $user->name = $name;
-        $user->email = $email;
-        $user->mobile = $mobile;
-        $user->governorate = $governorate;
-        $user->track = $track;
-        $user->skills = $skills;
-        $user->message = $message;
+        // نحفظ الكائن بالـ Session عشان نعرضه بصفحة profile.php
+        $_SESSION['registration'] = $success;
 
-        // نخزن البيانات بالـ Session
-        // (بنخزنها كمصفوفة عشان صفحة profile.php تقرأها)
-        $_SESSION["user"] = [
-            "name" => $user->name,
-            "email" => $user->email,
-            "mobile" => $user->mobile,
-            "governorate" => $user->governorate,
-            "track" => $user->track,
-            "skills" => $user->skills,
-            "message" => $user->message
-        ];
-
-        // نخزن الاسم والتراك بكوكي لمدة 30 يوم
-        // time() + 60*60*24*30 = الوقت الحالي + 30 يوم بالثواني
-        setcookie("saved_name", $user->name, time() + 60 * 60 * 24 * 30);
-        setcookie("saved_track", $user->track, time() + 60 * 60 * 24 * 30);
-
-        $success = true; // بنخلي الصفحة تعرض رسالة النجاح بدل النموذج
+        // نحفظ 3 قيم بالكوكيز لمدة 30 يوم (60 ثانية × 60 دقيقة × 24 ساعة × 30 يوم)
+        // لازم setcookie تنكتب قبل ما نطبع أي HTML، عشان هيك هي هون فوق
+        $expire = time() + 60 * 60 * 24 * 30;
+        setcookie('reg_name',  $success->name,  $expire, '/');
+        setcookie('reg_email', $success->email, $expire, '/');
+        setcookie('reg_track', $success->track, $expire, '/');
     }
 }
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Registration</title>
-  <!-- ربط ملف التنسيق CSS -->
-  <link rel="stylesheet" href="style.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Registration</title>
+    <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<div class="container">
 
-<?php if ($success) { ?>
+    <!-- شريط التنقل بين الصفحات -->
+    <nav>
+        <a href="register.php">Register</a>
+        <a href="profile.php">My Profile (Session)</a>
+        <a href="search.php">Search</a>
+    </nav>
 
-  <!-- صفحة النجاح: نعرض البيانات من الـ Object -->
-  <!-- htmlspecialchars بتحمي من هجمات XSS عن طريق تحويل الرموز الخاصة لنص عادي -->
-  <div class="card">
-    <h2 class="success">Registration successful!</h2>
-    <p><strong>Name:</strong> <?php echo htmlspecialchars($user->name); ?></p>
-    <p><strong>Email:</strong> <?php echo htmlspecialchars($user->email); ?></p>
-    <p><strong>Mobile:</strong> <?php echo htmlspecialchars($user->mobile); ?></p>
-    <p><strong>Governorate:</strong> <?php echo htmlspecialchars($user->governorate); ?></p>
-    <p><strong>Track:</strong> <?php echo htmlspecialchars($user->track); ?></p>
-    <!-- المهارات مصفوفة، فبنستخدم implode لدمجها بنص واحد مفصول بفاصلة -->
-    <p><strong>Skills:</strong> <?php echo htmlspecialchars(implode(", ", $user->skills)); ?></p>
-    <p><strong>Message:</strong> <?php echo htmlspecialchars($user->message); ?></p>
-    <!-- رابط لصفحة البروفايل (بتقرأ من الـ Session) ورابط للرجوع للنموذج -->
-    <a class="btn" href="profile.php">View profile (Session)</a>
-    <a class="btn" href="register.php">Back</a>
-  </div>
+<?php if ($success): ?>
 
-<?php } else { ?>
+    <!-- ===== التسجيل نجح: نعرض المعلومات اللي انبعثت ===== -->
+    <h1>Registration successful</h1>
+    <div class="box">
+        <p><strong>Name:</strong> <?= e($success->name) ?></p>
+        <p><strong>Email:</strong> <?= e($success->email) ?></p>
+        <p><strong>Mobile:</strong> <?= e($success->mobile) ?></p>
+        <p><strong>Governorate:</strong> <?= e($success->governorate) ?></p>
+        <p><strong>Track:</strong> <?= e($success->track) ?></p>
+        <p><strong>Skills:</strong> <?= e($success->skillsText()) ?></p>
+        <!-- nl2br بتحوّل نزول السطر لـ <br>، والرسالة اختيارية فإذا فاضية منعرض شرطة -->
+        <p><strong>Message:</strong> <?= $success->message !== '' ? nl2br(e($success->message)) : '-' ?></p>
+    </div>
+    <p><a href="profile.php">View data from session</a> | <a href="register.php">Register again</a></p>
 
-<!-- النموذج: action فاضي يعني يرسل لنفس الصفحة، و novalidate بيطفي تحقق المتصفح عشان نستخدم تحقق PHP -->
-<form action="" method="post" novalidate>
+<?php else: ?>
 
-  <!-- كل حقل: قيمته القديمة بتنطبع بـ value، ورسالة الخطأ تحته بالـ span (إذا موجودة) -->
-  <label for="name">Full Name</label>
-  <input type="text" id="name" name="name" value="<?php echo htmlspecialchars($name); ?>">
-  <span class="error"><?php echo $errors["name"] ?? ""; ?></span>
+    <!-- ===== فورم التسجيل ===== -->
+    <h1>Registration Form</h1>
 
-  <label for="email">Email</label>
-  <input type="email" id="email" name="email" value="<?php echo htmlspecialchars($email); ?>">
-  <span class="error"><?php echo $errors["email"] ?? ""; ?></span>
+    <!-- method="post" حسب المطلوب، و novalidate بيطفي تحقق المتصفح عشان نختبر تحققنا إحنا بالـ PHP -->
+    <form method="post" novalidate>
 
-  <label for="mobile">Mobile</label>
-  <input type="tel" id="mobile" name="mobile" placeholder="0791234567" value="<?php echo htmlspecialchars($mobile); ?>">
-  <span class="error"><?php echo $errors["mobile"] ?? ""; ?></span>
+        <!-- الاسم: value بترجّع القيمة القديمة إذا فشل التحقق -->
+        <div class="field">
+            <label for="name">Full Name</label>
+            <input type="text" id="name" name="name" value="<?= e($old['name']) ?>">
+            <?php if (isset($errors['name'])): ?><span class="error"><?= e($errors['name']) ?></span><?php endif; ?>
+        </div>
 
-  <!-- القائمة المنسدلة: الخيار المطابق للقيمة القديمة بياخد selected -->
-  <label for="governorate">Governorate</label>
-  <select id="governorate" name="governorate">
-    <option value="">Choose a governorate</option>
-    <option value="Amman"  <?php if ($governorate == "Amman")  echo "selected"; ?>>Amman</option>
-    <option value="Irbid"  <?php if ($governorate == "Irbid")  echo "selected"; ?>>Irbid</option>
-    <option value="Aqaba"  <?php if ($governorate == "Aqaba")  echo "selected"; ?>>Aqaba</option>
-    <option value="Zarqa"  <?php if ($governorate == "Zarqa")  echo "selected"; ?>>Zarqa</option>
-  </select>
-  <span class="error"><?php echo $errors["governorate"] ?? ""; ?></span>
+        <!-- الإيميل -->
+        <div class="field">
+            <label for="email">Email</label>
+            <input type="email" id="email" name="email" value="<?= e($old['email']) ?>">
+            <?php if (isset($errors['email'])): ?><span class="error"><?= e($errors['email']) ?></span><?php endif; ?>
+        </div>
 
-  <!-- أزرار الراديو (اختيار واحد فقط): كلهم بنفس الاسم track، والمطابق للقيمة القديمة بياخد checked -->
-  <label>Track</label>
-  <label class="inline">
-    <input type="radio" name="track" value="Full Stack" <?php if ($track == "Full Stack") echo "checked"; ?>>
-    Full Stack
-  </label>
-  <label class="inline">
-    <input type="radio" name="track" value="Frontend" <?php if ($track == "Frontend") echo "checked"; ?>>
-    Frontend
-  </label>
-  <label class="inline">
-    <input type="radio" name="track" value="Backend" <?php if ($track == "Backend") echo "checked"; ?>>
-    Backend
-  </label>
-  <span class="error"><?php echo $errors["track"] ?? ""; ?></span>
+        <!-- الموبايل -->
+        <div class="field">
+            <label for="mobile">Mobile</label>
+            <input type="text" id="mobile" name="mobile" placeholder="0791234567" value="<?= e($old['mobile']) ?>">
+            <?php if (isset($errors['mobile'])): ?><span class="error"><?= e($errors['mobile']) ?></span><?php endif; ?>
+        </div>
 
-  <!-- مربعات الاختيار (أكثر من خيار): الاسم skills[] عشان PHP يستقبلها كمصفوفة -->
-  <!-- in_array بتتأكد إذا القيمة موجودة بالمصفوفة عشان نعلّم الخيار checked -->
-  <label>Skills you already have</label>
-  <label class="inline">
-    <input type="checkbox" name="skills[]" value="HTML" <?php if (in_array("HTML", $skills)) echo "checked"; ?>>
-    HTML
-  </label>
-  <label class="inline">
-    <input type="checkbox" name="skills[]" value="CSS" <?php if (in_array("CSS", $skills)) echo "checked"; ?>>
-    CSS
-  </label>
-  <label class="inline">
-    <input type="checkbox" name="skills[]" value="JavaScript" <?php if (in_array("JavaScript", $skills)) echo "checked"; ?>>
-    JavaScript
-  </label>
-  <span class="error"><?php echo $errors["skills"] ?? ""; ?></span>
+        <!-- المحافظة: نمرّ على القائمة ونحط selected على الخيار المختار سابقاً -->
+        <div class="field">
+            <label for="governorate">Governorate</label>
+            <select id="governorate" name="governorate">
+                <option value="">-- Select --</option>
+                <?php foreach ($governorates as $g): ?>
+                    <option value="<?= e($g) ?>" <?= $old['governorate'] === $g ? 'selected' : '' ?>><?= e($g) ?></option>
+                <?php endforeach; ?>
+            </select>
+            <?php if (isset($errors['governorate'])): ?><span class="error"><?= e($errors['governorate']) ?></span><?php endif; ?>
+        </div>
 
-  <!-- حقل اختياري، ما إله تحقق -->
-  <label for="message">Why do you want to join? (optional)</label>
-  <textarea id="message" name="message" rows="4"><?php echo htmlspecialchars($message); ?></textarea>
+        <!-- الـ Track: radio buttons (خيار واحد بس)، و checked على الخيار القديم -->
+        <div class="field">
+            <label>Track</label>
+            <div class="options">
+                <?php foreach ($tracks as $t): ?>
+                    <label class="inline">
+                        <input type="radio" name="track" value="<?= e($t) ?>" <?= $old['track'] === $t ? 'checked' : '' ?>>
+                        <?= e($t) ?>
+                    </label>
+                <?php endforeach; ?>
+            </div>
+            <?php if (isset($errors['track'])): ?><span class="error"><?= e($errors['track']) ?></span><?php endif; ?>
+        </div>
 
-  <!-- الموافقة على الشروط: إجبارية، إذا ما انعلّمت ما بتنبعث بالـ POST أصلاً -->
-  <label class="inline terms">
-    <input type="checkbox" name="agree" <?php if ($agree != "") echo "checked"; ?>>
-    I agree to the academy terms
-  </label>
-  <span class="error"><?php echo $errors["agree"] ?? ""; ?></span>
+        <!-- المهارات: checkboxes، واسم الحقل skills[] عشان PHP يستقبلها كمصفوفة -->
+        <div class="field">
+            <label>Skills</label>
+            <div class="options">
+                <?php foreach ($skillsList as $s): ?>
+                    <label class="inline">
+                        <input type="checkbox" name="skills[]" value="<?= e($s) ?>" <?= in_array($s, $old['skills'], true) ? 'checked' : '' ?>>
+                        <?= e($s) ?>
+                    </label>
+                <?php endforeach; ?>
+            </div>
+            <?php if (isset($errors['skills'])): ?><span class="error"><?= e($errors['skills']) ?></span><?php endif; ?>
+        </div>
 
-  <button type="submit">Register</button>
-</form>
+        <!-- الرسالة (اختيارية، ما إلها تحقق) -->
+        <div class="field">
+            <label for="message">Message</label>
+            <textarea id="message" name="message" rows="4"><?= e($old['message']) ?></textarea>
+        </div>
 
-<?php } // نهاية شرط if ($success) ?>
+        <!-- الشروط والأحكام -->
+        <div class="field">
+            <label class="inline">
+                <input type="checkbox" name="terms" value="1" <?= $old['terms'] === '1' ? 'checked' : '' ?>>
+                I accept the Terms &amp; Conditions
+            </label>
+            <?php if (isset($errors['terms'])): ?><span class="error"><?= e($errors['terms']) ?></span><?php endif; ?>
+        </div>
 
+        <button type="submit">Register</button>
+    </form>
+
+<?php endif; ?>
+
+</div>
 </body>
 </html>

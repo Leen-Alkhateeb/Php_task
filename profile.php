@@ -1,47 +1,59 @@
 <?php
-// بدء الجلسة (Session) عشان نقدر نقرأ البيانات المخزنة من صفحة التسجيل
-// لازم تكون أول سطر قبل أي إخراج HTML
+// نحمّل الكلاس قبل session_start() عشان PHP يعرف يرجّع الكائن المخزّن
+require_once 'Registration.php';
 session_start();
+
+// دالة تنظيف النص قبل الطباعة (حماية من XSS)
+function e($value): string
+{
+    return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
+}
+
+// نجيب الكائن من الـ Session، وإذا مش موجود بيكون null
+$reg = $_SESSION['registration'] ?? null;
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Profile</title>
-  <!-- ربط ملف التنسيق CSS -->
-  <link rel="stylesheet" href="style.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>My Profile</title>
+    <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div class="card">
+<div class="container">
 
-<?php 
-// نتأكد إذا في بيانات مستخدم مخزنة بالجلسة (يعني المستخدم سجّل قبل)
-if (isset($_SESSION["user"])) { ?>
+    <nav>
+        <a href="register.php">Register</a>
+        <a href="profile.php">My Profile (Session)</a>
+        <a href="search.php">Search</a>
+    </nav>
 
-  <h2>Your registration (from Session)</h2>
+    <h1>My Registered Information</h1>
 
-  <!-- كل سطر بيطبع قيمة من الجلسة -->
-  <!-- htmlspecialchars بتحمي من هجمات XSS عن طريق تحويل الرموز الخاصة لنص عادي -->
-  <p><strong>Name:</strong> <?php echo htmlspecialchars($_SESSION["user"]["name"]); ?></p>
-  <p><strong>Email:</strong> <?php echo htmlspecialchars($_SESSION["user"]["email"]); ?></p>
-  <p><strong>Mobile:</strong> <?php echo htmlspecialchars($_SESSION["user"]["mobile"]); ?></p>
-  <p><strong>Governorate:</strong> <?php echo htmlspecialchars($_SESSION["user"]["governorate"]); ?></p>
-  <p><strong>Track:</strong> <?php echo htmlspecialchars($_SESSION["user"]["track"]); ?></p>
+    <!-- instanceof بتتأكد إنه اللي بالـ Session فعلاً كائن من نوع Registration -->
+    <?php if ($reg instanceof Registration): ?>
+        <div class="box">
+            <p><strong>Name:</strong> <?= e($reg->name) ?></p>
+            <p><strong>Email:</strong> <?= e($reg->email) ?></p>
+            <p><strong>Mobile:</strong> <?= e($reg->mobile) ?></p>
+            <p><strong>Governorate:</strong> <?= e($reg->governorate) ?></p>
+            <p><strong>Track:</strong> <?= e($reg->track) ?></p>
+            <p><strong>Skills:</strong> <?= e($reg->skillsText()) ?></p>
+            <p><strong>Message:</strong> <?= $reg->message !== '' ? nl2br(e($reg->message)) : '-' ?></p>
+        </div>
+    <?php else: ?>
+        <!-- ما في بيانات بالـ Session، يعني المستخدم ما سجّل لسا -->
+        <p class="error">No registration found in the session. <a href="register.php">Register first</a>.</p>
+    <?php endif; ?>
 
-  <!-- المهارات مخزنة كمصفوفة (Array)، فبنستخدم implode لدمجها بنص واحد مفصول بفاصلة -->
-  <p><strong>Skills:</strong> <?php echo htmlspecialchars(implode(", ", $_SESSION["user"]["skills"])); ?></p>
-  <p><strong>Message:</strong> <?php echo htmlspecialchars($_SESSION["user"]["message"]); ?></p>
+    <!-- إذا في كوكي محفوظ بنعرض رسالة ترحيب منه -->
+    <?php if (isset($_COOKIE['reg_name'])): ?>
+        <div class="box">
+            <p><strong>From cookie:</strong> Welcome back, <?= e($_COOKIE['reg_name']) ?>!</p>
+        </div>
+    <?php endif; ?>
 
-<?php } else { 
-// إذا ما في بيانات بالجلسة، يعني المستخدم ما عبّى نموذج التسجيل ?>
-
-  <h2>No registration found</h2>
-  <p>You have not registered yet.</p>
-
-<?php } // نهاية شرط if ?>
-
-  <!-- رابط للرجوع لصفحة نموذج التسجيل (بشكل زر) -->
-  <a class="btn" href="register.php">Registration form</a>
 </div>
 </body>
 </html>
